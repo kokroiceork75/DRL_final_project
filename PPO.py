@@ -4,7 +4,8 @@
 from collections import namedtuple
 from itertools import count
 
-import os, time
+import os
+import time
 import numpy as np
 # import matplotlib.pyplot as plt
 
@@ -17,60 +18,48 @@ from torch.distributions import Normal, Categorical
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
 from torch.utils.tensorboard import SummaryWriter
 from environment_stage_4_ppo import Env
-import time
 import rospy
-import tensorboard
 from std_msgs.msg import Float32MultiArray
-#tb =SummaryWriter('/home/ffd/DRL/PPO/PPO/model/log')
-tb =SummaryWriter('/home/user/drl_ws/src/PPO-SAC-DQN-DDPG/PPO/log')
-# Parameters
-gamma = 0.99
-render = False
-seed = 1
-log_interval = 10
 
+# 設置 TensorBoard 記錄路徑
+tb = SummaryWriter('/home/user/drl_ws/src/PPO-SAC-DQN-DDPG/PPO/log')
 
-# env = gym.make('CartPole-v0').unwrapped
-# action个数为19，observation为115。
-num_state =28
+# 訓練參數設置
+gamma = 0.99  # 折扣因子
+render = False  # 是否渲染環境
+seed = 1  # 隨機種子
+log_interval = 10  # 記錄間隔
+
+# 狀態和動作維度
+num_state = 28
 num_action = 5
-env=Env(num_action)
-torch.manual_seed(seed)#为CPU设置种子用于生成随机数，以使得结果是确定的
-# env.seed(seed)
-Transition = namedtuple('Transition', ['state', 'action',  'a_log_prob', 'reward', 'next_state'])
 
-class Actor(nn.Module):#Actor网络 
-    def __init__(self):#定义网络
+# 初始化環境
+env = Env(num_action)
+torch.manual_seed(seed)  # 設置隨機種子
+Transition = namedtuple('Transition', ['state', 'action', 'a_log_prob', 'reward', 'next_state'])
+
+class Actor(nn.Module): # 定義actor網路相關設置，狀態數量:28，動作數量:5
+    def __init__(self):
         super(Actor, self).__init__()
         self.fc1 = nn.Linear(num_state, 100)
-        # self.fc1.weight.data.normal_(0, 0.1)
-
-        # self.fc2 =nn.Linear(128,128)
-        # self.fc2.weight.data.normal_(0,0.1)
-
         self.action_head = nn.Linear(100, num_action)
-        # self.action_head.weight.data.normal_(0, 0.1)  
 
-    def forward(self, x):#前向传播
+    def forward(self, x):
         x = F.relu(self.fc1(x))
-        # x=F.relu(self.fc2(x))
-        # x=F.dropout(self.fc2(x))
         action_prob = F.softmax(self.action_head(x), dim=1)
         return action_prob
 
-
-class Critic(nn.Module):#Critic网络
-    def __init__(self):#定义网络
+class Critic(nn.Module): # 定義critic網路相關設置，輸出價值:1
+    def __init__(self):
         super(Critic, self).__init__()
-        self.fc1= nn.Linear(num_state, 100)
+        self.fc1 = nn.Linear(num_state, 100)
         self.state_value = nn.Linear(100, 1)
-        
-    def forward(self, x):#前向传播
+
+    def forward(self, x):
         x = F.relu(self.fc1(x))
-        # x=F.dropout(self.fc22(x))
         value = self.state_value(x)
         return value
-
 
 class PPO(object):
     clip_param = 0.2
@@ -86,49 +75,48 @@ class PPO(object):
         self.buffer = []
         self.counter = 0
         self.training_step = 0
-        self.action_loss= 0.
-        self.value_loss =0.
-        #self.load_models =False #沒有自己訓練好的模型
-        self.load_models = True
-        self.load_ep =104
+        self.action_loss = 0.
+        self.value_loss = 0.
+        self.load_models = True  # 是否加載預訓練模型
+        self.load_ep = 104
         self.actor_optimizer = optim.Adam(self.actor_net.parameters(), 1e-3)
         self.critic_net_optimizer = optim.Adam(self.critic_net.parameters(), 3e-3)
-        # Adam(Adaptive Moment Estimation)本质上是带有动量项的RMSprop，它利用梯度的一阶矩估计和二阶矩估计动态调整每个参数的学习率。它的优点主要在于经过偏置校正后，每一次迭代学习率都有个确定范围，使得参数比较平稳。
-        #加载模型
-        if self.load_models:
-            #load_model1 = torch.load("/home/ffd/DRL/PPO/model/maze/98ep.pt")
-            #load_model1 = torch.load("/home/user/drl_ws/src/PPO-SAC-DQN-DDPG/PPO/models/maze/98ep.pt")
-            load_model1 = torch.load("/home/user/drl_ws/src/PPO-SAC-DQN-DDPG/PPO/models/state2/749state2.pt")
 
+        if self.load_models:
+            load_model1 = torch.load("/home/user/drl_ws/src/PPO-SAC-DQN-DDPG/PPO/models/state2/749state2.pt") # 加載的模型
             self.actor_net.load_state_dict(load_model1['actor_net'])
             self.critic_net.load_state_dict(load_model1['critic_net'])
-            print("load model:",str(self.load_ep))
-            print("load model successful!!!!!!")
-#选择动作
+            print("加載模型:", str(self.load_ep))
+            print("加載模型成功!!!!!!")
+
     def select_action(self, state):
-        state = torch.from_numpy(state).float().unsqueeze(0) 
+        state = torch.from_numpy(state).float().unsqueeze(0)
         with torch.no_grad():
             action_prob = self.actor_net(state)
         c = Categorical(action_prob)
         action = c.sample()
-        return action.item(), action_prob[:,action.item()].item()
-#获取值函数
+        return action.item(), action_prob[:, action.item()].item()
+
     def get_value(self, state):
         state = torch.from_numpy(state)
         with torch.no_grad():
             value = self.critic_net(state)
         return value.item()
-#保存神经网络参数
-    def save_param(self,e):
-        state = {'actor_net':self.actor_net.state_dict(),'critic_net':self.critic_net.state_dict(), 'actor_optimizer':self.actor_optimizer.state_dict(), 'critic_optimizer':self.critic_net_optimizer,'epoch':e}
-        #torch.save(state,"/home/ffd/DRL/PPO/model/state2/"+str(e)+"state2.pt")
-        torch.save(state,"/home/user/drl_ws/src/PPO-SAC-DQN-DDPG/PPO/models/state2/"+str(e)+"state2.pt")
-#保存训练数据（记忆库）
+
+    def save_param(self, e):
+        state = {
+            'actor_net': self.actor_net.state_dict(),
+            'critic_net': self.critic_net.state_dict(),
+            'actor_optimizer': self.actor_optimizer.state_dict(),
+            'critic_optimizer': self.critic_net_optimizer,
+            'epoch': e
+        }
+        torch.save(state, "/home/user/drl_ws/src/PPO-SAC-DQN-DDPG/PPO/models/state2/" + str(e) + "state2.pt") # 儲存模型的資料夾和檔名
+
     def store_transition(self, transition):
         self.buffer.append(transition)
         self.counter += 1
 
-#计算损失并更新
     def update(self, i_ep):
         state = torch.tensor([t.state for t in self.buffer], dtype=torch.float)
         action = torch.tensor([t.action for t in self.buffer], dtype=torch.long).view(-1, 1)
@@ -141,95 +129,85 @@ class PPO(object):
             R = r + gamma * R
             Gt.insert(0, R)
         Gt = torch.tensor(Gt, dtype=torch.float)
-        #print("The agent is updateing....")
+
         for i in range(self.ppo_update_time):
             for index in BatchSampler(SubsetRandomSampler(range(len(self.buffer))), self.batch_size, False):
-                if self.training_step % 1000 ==0:
-                    print('I_ep {} ，train {} times'.format(i_ep,self.training_step))
-                #with torch.no_grad():
+                if self.training_step % 1000 == 0:
+                    print('I_ep {} ，訓練 {} 次'.format(i_ep, self.training_step))
+
                 Gt_index = Gt[index].view(-1, 1)
                 V = self.critic_net(state[index])
                 delta = Gt_index - V
                 advantage = delta.detach()
-                # epoch iteration, PPO core!!一次训练的参数更新
-                action_prob = self.actor_net(state[index]).gather(1, action[index]) # new policy
-                #采用 Adam 随机梯度上升算法最大化 PPO-Clip 的目标函数来更新策略
-                #
-                ratio = (action_prob/old_action_log_prob[index])
+
+                action_prob = self.actor_net(state[index]).gather(1, action[index])
+                ratio = (action_prob / old_action_log_prob[index])
                 surr1 = ratio * advantage
                 surr2 = torch.clamp(ratio, 1 - self.clip_param, 1 + self.clip_param) * advantage
 
-                # update actor network
-                action_loss = -torch.min(surr1, surr2).mean()  # MAX->MIN desent
+                action_loss = -torch.min(surr1, surr2).mean()
                 self.action_loss = torch.max(action_loss)
-                # self.writer.add_scalar('loss/action_loss', action_loss, global_step=self.training_step)
                 self.actor_optimizer.zero_grad()
                 action_loss.backward()
                 nn.utils.clip_grad_norm_(self.actor_net.parameters(), self.max_grad_norm)
                 self.actor_optimizer.step()
 
-                #update critic network
                 value_loss = F.mse_loss(Gt_index, V)
                 self.value_loss = torch.max(value_loss)
-                # self.writer.add_scalar('loss/value_loss', value_loss, global_step=self.training_step)
                 self.critic_net_optimizer.zero_grad()
                 value_loss.backward()
                 nn.utils.clip_grad_norm_(self.critic_net.parameters(), self.max_grad_norm)
                 self.critic_net_optimizer.step()
                 self.training_step += 1
 
-        del self.buffer[:] # clear experience
+        del self.buffer[:]
 
-    
 def main():
     agent = PPO()
-    rospy.init_node('turtlebot3_dqn_stage_4')
+    rospy.init_node('turtlebot3_dqn_stage_4') # 初始化ROS Node
+    # ROS發布相關資訊(透過topic)
     pub_result = rospy.Publisher('result', Float32MultiArray, queue_size=5)
     pub_get_action = rospy.Publisher('get_action', Float32MultiArray, queue_size=5)
     result = Float32MultiArray()
     get_action = Float32MultiArray()
-    start_time =time.time()
-    # env=Env()
-    #for e in range(100):
-    for e in range(750, 850):  # 開始epoch從100到120
-        state = env.reset()#env.reset()函数用于重置环境
-        # if render: env.render()#env.render()函数用于渲染出当前的智能体以及环境的状态
-        episode_reward_sum = 0                                              # 初始化该循环对应的episode的总奖励
-        done=False
-        episode_step=6000
+    start_time = time.time()
 
-
+    for e in range(750, 850): # 設置開始訓練epoch和結束epoch，例如這裡代表從750開始訓練到850
+        state = env.reset()
+        episode_reward_sum = 0
+        done = False
+        episode_step = 6000 # 每個epoch有6000步
 
         for t in range(episode_step):
             action, action_prob = agent.select_action(state)
-            next_state, reward, done= env.step(action)
+            next_state, reward, done = env.step(action)
             trans = Transition(state, action, action_prob, reward, next_state)
-            # if render: env.render()
             agent.store_transition(trans)
             state = next_state
-            episode_reward_sum+=reward
+            episode_reward_sum += reward
             pub_get_action.publish(get_action)
-            if e % 1 ==0:                # dqn.save_model(str(e))
+            if e % 1 == 0:
                 agent.save_param(e)
-            if t >=600:
+            if t >= 600:
                 rospy.loginfo("time out!")
-                done =True
+                done = True
 
-            if done :
-                result.data =[episode_reward_sum,agent.action_loss,agent.value_loss]
+            if done:
+                result.data = [episode_reward_sum, agent.action_loss, agent.value_loss]
                 pub_result.publish(result)
-                tb.add_scalar('Loss',  episode_reward_sum,e)
-                tb.add_scalar('value_loss',agent.value_loss, e)
+                # tensorboard相關
+                tb.add_scalar('Loss', episode_reward_sum, e)
+                tb.add_scalar('value_loss', agent.value_loss, e)
                 tb.add_scalar('action_loss', agent.action_loss, e)
 
-                m,s =divmod(int(time.time()- start_time),60)
-                h,m =divmod(m,60)
+                m, s = divmod(int(time.time() - start_time), 60)
+                h, m = divmod(m, 60)
                 agent.update(e)
-                rospy.loginfo('Ep: %d score: %.2f memory: %d episode_step: %.2f time: %d:%02d:%02d' , e ,episode_reward_sum, agent.counter,t, h, m, s)
+                # 在terminal印出相關資訊
+                rospy.loginfo('Ep: %d score: %.2f memory: %d episode_step: %.2f time: %d:%02d:%02d',
+                              e, episode_reward_sum, agent.counter, t, h, m, s)
                 break
+
 if __name__ == '__main__':
-
-
     main()
     print("end")
-
